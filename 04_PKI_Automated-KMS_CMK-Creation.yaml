@@ -1,0 +1,106 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: 2010-09-09
+Description:
+  'The automate KMS Customer Managed Key (CMK) cloudformation template performs the following tasks:
+   - Creates a symmetric KMS CMK Administrator and User permissions. It also enables auto key rotation'
+
+Parameters:
+  KMSKeyName:
+    Description: Enter the Name of the KMS CMK.
+    Type: String
+  KmsCmkAdministrator:
+    Description: Enter the KMS CMK administrator role (Typically account Admin role).
+    Type: String
+  KmsCmkUser:
+    Description: Enter the KMS CMK User role (Typically account Admin and/or non-admin role).
+    Type: String
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Customer Managed KMS settings
+        Parameters:
+          - KMSKeyName
+          - KmsCmkAdministrator
+          - KmsCmkUser
+
+Resources:
+  AWSKmsCmk:
+    Type: 'AWS::KMS::Key'
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: AWS symmetric KMS CMK
+      EnableKeyRotation: true
+      KeyUsage: ENCRYPT_DECRYPT
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: key-default-1
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${KmsCmkAdministrator}'
+            Action:
+              - 'kms:Create*'
+              - 'kms:Describe*'
+              - 'kms:Enable*'
+              - 'kms:List*'
+              - 'kms:Put*'
+              - 'kms:Update*'
+              - 'kms:Revoke*'
+              - 'kms:Disable*'
+              - 'kms:Get*'
+              - 'kms:Delete*'
+              - 'kms:ScheduleKeyDeletion'
+              - 'kms:CancelKeyDeletion'
+            Resource: '*'
+          - Sid: Allow use of the key
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${KmsCmkUser}'
+            Action:
+              - 'kms:DescribeKey'
+              - 'kms:Encrypt'
+              - 'kms:Decrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey'
+              - 'kms:GenerateDataKeyWithoutPlaintext'
+            Resource: '*'
+          - Sid: Allow attachment of persistent resources
+            Effect: Allow
+            Principal:
+             AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${KmsCmkAdministrator}'
+            Action:
+              - 'kms:CreateGrant'
+              - 'kms:ListGrants'
+              - 'kms:RevokeGrant'
+            Resource: '*'
+            Condition:
+              Bool:
+                'kms:GrantIsForAWSResource': 'true'
+      Tags:
+        - Key: Name
+          Value: !Ref KMSKeyName
+
+  myAlias:
+    Type: 'AWS::KMS::Alias'
+    Properties:
+      AliasName: !Sub 'alias/${KMSKeyName}'
+      TargetKeyId: !Ref AWSKmsCmk
+
+Outputs:
+  AWSKmsCmkName:
+    Description: KMS Customer managed key
+    Value: !Ref AWSKmsCmk
+    Export:
+      Name: !Sub '${KMSKeyName}-${AWS::AccountId}-${AWS::StackName}'

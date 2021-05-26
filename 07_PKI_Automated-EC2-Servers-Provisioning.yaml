@@ -1,0 +1,490 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0 
+
+AWSTemplateFormatVersion: 2010-09-09
+Description:
+  'The Automated Servers CloudFormation script performs the following orchestration tasks:
+  - Creates a purpose built EC2 instance within an existing VPC 
+  - It deploys the server in a user defined subnet, and associates it with appropriate Security Group, Keypair and other custom configurations 
+  - Administrator decides whether to deploy it as a dedicated instance tenancy or not, and all EBS drives are encrypted by default (with CMK) 
+  - It currently creates a new target group and associates with a load balancer.  
+  - UserData Scripts to add tags to EBS, and optional scripts to: add instance to an existing target group, join AD and configure DNS on the server as needed'
+
+Parameters:
+  AWSServerName:
+    Description: 'Enter the appropriate name for this server (e.g ? subca1-tst or dc01-prd).'
+    Type: String
+    ConstraintDescription: must enter a value for this resource
+  KeyPairName:
+    Description: Select the appropriate EC2 Key Pair
+    Type: 'AWS::EC2::KeyPair::KeyName'
+  AWSVpcId:
+    Type: 'AWS::EC2::VPC::Id'
+    Description: Select the Appropriate VPC
+  PrivateSubnet:
+    Description: >-
+      'Select the appropriate Private Subnet, that corresponds with the selected VPC'
+    Type: 'AWS::EC2::Subnet::Id'
+  AWSPrivateServersSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup::Id'
+    Description: >-
+      'Select the appropriate Security Group, that corresponds with the selected VPC'
+  ImageId:
+    Type: String
+    Description: >-
+      'Enter the appropriate base AMI, that corresponds with the selected Region (https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#Images:visibility=private-images;sort=name)'
+  InstanceType:
+    Description: 'Select the appropriate Instance type'
+    Type: String
+    Default:  m5.2xlarge
+    AllowedValues:
+      - m5.medium
+      - m5.large
+      - m5.xlarge
+      - m5.2xlarge
+      - m4.large
+      - m4.xlarge
+      - m4.2xlarge
+      - m4.4xlarge
+      - m4.10xlarge
+  InstanceTenancy:
+    Description: >-
+      'Select the appropriate Tenancy type (Use dedicated for all Tier Zero assets).'
+    Type: String
+    Default: default
+    AllowedValues:
+      - dedicated
+      - default
+      - host
+  VolumeSize1:
+    Description: 'The default is 200 for every application server.'
+    Type: Number
+    Default: 100
+    AllowedValues:
+      - 60
+      - 100
+      - 200
+      - 500
+      - 1000
+  VolumeSize2:
+    Description: 'The default is 200 for every application server.'
+    Type: Number
+    Default: 100
+    AllowedValues:
+      - 60
+      - 100
+      - 200
+      - 500
+      - 1000
+
+  IOPS1:
+    Description: 'Select the appropriate IOPs for the EC2 volume'
+    Type: Number
+    Default: 5000
+    AllowedValues:
+      - 500
+      - 1000
+      - 2000
+      - 5000
+      - 8000
+  IOPS2:
+    Description: 'Select the appropriate IOPs for the EC2 volume'
+    Type: Number
+    Default: 2000
+    AllowedValues:
+      - 500
+      - 1000
+      - 2000
+      - 5000
+      - 8000
+
+  EncryptVolume:
+    Type: String
+    Description: 'All servers are encrypted by default, cannot be modified'
+    Default: true
+    AllowedValues:
+      - true
+
+  KmsKeyARN:
+    Type: String
+    Description: 'Must enter an ARN of your customer managed key - https://console.aws.amazon.com/kms/home?region=us-east-1#/kms/keys (To create a Symmetric CMK, follow this link: https://us-east-1.console.aws.amazon.com/servicecatalog/home?isSceuc=true&region=us-east-1#/product/details?productId=prod-g4jdpswzwxqso)'
+    Default: Enter CMK ARN
+
+  ALBListenerARN:
+    Type: String
+    Description: >-
+      Enter the appropriate Application Load Balancer Listener ARN, that corresponds with the selected VPC --> (Must copy and paste the appropriate Load Balancer Listener ARN (If TargetGroupType = CreateNew-TargetGroup)
+      https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#LoadBalancers:sort=loadBalancerName)
+
+  TargetGroupName:
+    Type: String
+    Description: >-
+      Enter a name for the new Target Group (Required if TargetGroupType = CreateNew-TargetGroup)
+
+  CreateNewSSMRole:
+    Type: String
+    Description: >-
+      Only create this new SSM role if it does not already exist in this account. (The default value should always be (FALSE), verify before before selecting otherwise)
+    Default: False
+    AllowedValues:
+      - False
+      - True
+
+  TargetGroupType:
+    Type: String
+    Description: >-
+      Indicate if this server requires a New or Existing or No Target group. (Note: For PKI Servers, you must select “CreateNew-TargetGroup” for the first server, or “Existing-TargetGroup” for subsequent servers in the same network).
+    Default: NONE
+    AllowedValues:
+      - CreateNew-TargetGroup
+      - Existing-TargetGroup
+      - NONE
+
+  ExistingTargetGroupARN:
+    Type: String
+    Description: >-
+      Enter the existing Target Group ARN --> (Must copy and paste the appropriate Target Group ARN (If TargetGroupType = Existing-TargetGroup)
+      https://console.aws.amazon.com/ec2/home?region=us-east-1#TargetGroups)
+
+  DomainNameFQDN:
+    Type: String
+    Description: >-
+      Enter the Fully Qualified Domain Name (FQDN) the AD domain
+
+  DomainJoinUserKey:
+    Type: String
+    Description: >-
+      Enter the store parameter key for the domain service account user
+
+  DomainJoinPasswordKey:
+    Type: String
+    Description: >-
+      Enter the store parameter key for the domain service account password
+
+  ADDomainJoin:
+    Type: String
+    Description: >-
+      Are you joining this server to an Active Directory Domain? (If True, must enter SecureString SSM Parameters for username and password. Follow this link to create it: https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-paramstore-console.html)
+    Default: "False"
+    AllowedValues:
+      - "True"
+      - "False"
+
+  UpdateDNSAddress1:
+    Type: String
+    Description: >-
+      Do you need to update the Primary DNS Server Address (Optional)?
+    Default: "NONE"
+
+  UpdateDNSAddress2:
+    Type: String
+    Description: >-
+      Do you need to update the Alternative DNS Server Address (Optional)?
+    Default: "NONE"
+
+  DNSEndPoint:
+    Type: String
+    Description: >-
+      Enter the DNS Endpoint or URL for this Server (Only applies if TargetGroupType =  CreateNew-TargetGroup) Example -> (URL = hostname.domain.com)
+
+  TerminationProtection:
+    Type: String
+    Description: >-
+      Termination protection is set to TRUE by default
+    Default: true
+    AllowedValues:
+      - true
+      - false
+
+  Environment:
+    Type: String
+    Description: Resource environment tag
+    AllowedValues:
+      - poc
+      - dev
+      - test
+      - prd
+    Default: poc
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Server - Security and Network Properties
+        Parameters:
+          - AWSServerName
+          - KeyPairName
+          - AWSVpcId
+          - PrivateSubnet
+          - AWSPrivateServersSecurityGroup
+          - CreateNewSSMRole
+      - Label:
+          default: Server Specific Properties
+        Parameters:
+          - ImageId
+          - InstanceTenancy
+          - InstanceType
+          - VolumeSize1
+          - IOPS1
+          - VolumeSize2
+          - IOPS2
+          - EncryptVolume
+          - KmsKeyARN
+          - TerminationProtection
+          - Environment
+      - Label:
+          default: Server Load Balancer and Route Properties
+        Parameters:
+          - TargetGroupType
+          - ExistingTargetGroupARN
+          - TargetGroupName
+          - ALBListenerARN
+          - DNSEndPoint
+      - Label:
+          default: Optional - properties Join Server to Active Directory Domain
+        Parameters:
+          - ADDomainJoin
+          - DomainNameFQDN
+          - DomainJoinUserKey
+          - DomainJoinPasswordKey
+          - UpdateDNSAddress1
+          - UpdateDNSAddress2
+
+Conditions:
+  CreateSSMRole: !Equals
+    - !Ref CreateNewSSMRole
+    - True
+
+  CreateNewTargetGroup: !Equals
+    - !Ref TargetGroupType
+    - CreateNew-TargetGroup
+
+Resources:
+  EC2RoleWaitHandle: 
+    Condition: CreateSSMRole
+    DependsOn: EC2SSMRole
+    Type: "AWS::CloudFormation::WaitConditionHandle"
+
+  WaitHandle: 
+    Type: "AWS::CloudFormation::WaitConditionHandle"
+
+  WaitCondition: 
+    Type: "AWS::CloudFormation::WaitCondition"
+    Properties: 
+      Handle: !If [CreateSSMRole, !Ref EC2RoleWaitHandle, !Ref WaitHandle]
+      Timeout: "15"
+      Count: 0
+
+  EC2SSMRole:
+    Type: 'AWS::IAM::Role'
+    Condition: CreateSSMRole
+    DeletionPolicy: Retain
+    Properties:
+      RoleName: !Sub 'EC2SSMRole-${AWS::AccountId}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM            
+        - arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole
+        - arn:aws:iam::aws:policy/AmazonSSMPatchAssociation
+        - arn:aws:iam::aws:policy/ElasticLoadBalancingFullAccess
+
+  InstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    DependsOn: WaitCondition
+    Properties:
+      Path: /
+      Roles:
+        - !Sub 'EC2SSMRole-${AWS::AccountId}'
+
+  AWSEC2Server:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      DisableApiTermination: !Ref TerminationProtection
+      SecurityGroupIds:
+        - !Ref AWSPrivateServersSecurityGroup
+      IamInstanceProfile: !Ref InstanceProfile
+      Tenancy: !Ref InstanceTenancy
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeType: io1
+            Iops: !Ref IOPS1
+            DeleteOnTermination: true
+            VolumeSize: !Ref VolumeSize1
+            Encrypted: !Ref EncryptVolume
+            KmsKeyId: !Ref KmsKeyARN
+        - DeviceName: xvdf
+          Ebs:
+            VolumeType: io1
+            Iops: !Ref IOPS2
+            DeleteOnTermination: true
+            VolumeSize: !Ref VolumeSize2
+            Encrypted: !Ref EncryptVolume
+            KmsKeyId: !Ref KmsKeyARN
+      Tags:
+        - Key: Name
+          Value: !Ref AWSServerName
+        - Key: Environment
+          Value: !Ref Environment
+      UserData: !Base64 
+        'Fn::Sub': |
+          <powershell>
+            $tempdir = "C:\Temp"
+            Start-Transcript -Path $tempdir\UserDataOutput.log
+            Invoke-WebRequest ` https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/windows_amd64/AmazonSSMAgentSetup.exe ` -OutFile $tempdir\SSMAgent_latest.exe
+            write-host("############# ===------> Downloaded latest SSM agent")
+
+            Start-Process ` -FilePath $tempdir\SSMAgent_latest.exe ` -ArgumentList "/S"
+            write-host("############# ===------> Installed SSM agent")
+
+            Restart-Service AmazonSSMAgent
+            write-host("############# ===------> Restarted SSM agent")
+
+            write-host("############# ===------> Instantiating required EBS veriables ..............")
+            $AWS_AVAIL_ZONE=(Invoke-RestMethod -Method Get -Uri  http://169.254.169.254/latest/meta-data/placement/availability-zone)
+            $AWS_REGION=$AWS_AVAIL_ZONE.Substring(0,$AWS_AVAIL_ZONE.length-1)
+            $AWS_INSTANCE_ID=(Invoke-RestMethod -Method Get -Uri  http://169.254.169.254/latest/meta-data/instance-id)
+            $ROOT_VOLUME_IDS=((Get-EC2Instance -Region $AWS_REGION -InstanceId $AWS_INSTANCE_ID).Instances.BlockDeviceMappings | where-object DeviceName -match '/dev/sda1').Ebs.VolumeId
+            $tag = New-Object Amazon.EC2.Model.Tag
+            $tag.key = "Name"
+            $tag.value = "${AWSServerName}"
+            New-EC2Tag -Resource $ROOT_VOLUME_IDS -Region $AWS_REGION -Tag $tag
+            write-host("############# ===------> Created Name tag on EBS volume 1")
+            $tag = New-Object Amazon.EC2.Model.Tag
+            $tag.key = "Environment"
+            $tag.value = "${Environment}"
+            New-EC2Tag -Resource $ROOT_VOLUME_IDS -Region $AWS_REGION -Tag $tag
+            write-host("############# ===------> Created Backup tag on EBS volume 1")
+            $Ddrive_VOLUME_IDS=((Get-EC2Instance -Region $AWS_REGION -InstanceId $AWS_INSTANCE_ID).Instances.BlockDeviceMappings | where-object DeviceName -match 'xvdf').Ebs.VolumeId
+            $tag = New-Object Amazon.EC2.Model.Tag
+            $tag.key = "Name"
+            $tag.value = "${AWSServerName}"
+            write-host("############# ===------> Created Name tag on EBS volume 2")
+            New-EC2Tag -Resource $Ddrive_VOLUME_IDS -Region $AWS_REGION -Tag $tag
+            $tag = New-Object Amazon.EC2.Model.Tag
+            $tag.key = "Environment"
+            $tag.value = "${Environment}"
+            New-EC2Tag -Resource $Ddrive_VOLUME_IDS -Region $AWS_REGION -Tag $tag
+            write-host("############# ===------> Created Backup tag on EBS volume 2")
+            
+            write-host("############# ===------> Instantiating required Instance veriables ..............")
+            $instanceId = (Invoke-RestMethod -Method Get -Uri http://169.254.169.254/latest/meta-data/instance-id)
+            $name = Get-EC2Tag |where {$_.resourceID -eq $instanceId} |where {$_.key -eq "Name"}
+            $RegisterInstance = "${TargetGroupType}"
+            $JoinADDomain = "${ADDomainJoin}"
+
+            if($RegisterInstance -eq "Existing-TargetGroup") {
+              Register-ELB2Target -TargetGroupArn ${ExistingTargetGroupARN} -Target @{ Id = $instanceId; Port = 443 }
+              write-host("############# ===------> Added Instance to Target Group")
+            }
+            else {
+             write-host("############# ===------> An existing Target group was not selected")
+            }
+
+            Rename-Computer -NewName "${AWSServerName}" -Force
+            write-host("############# ===------> Renamed Computer")
+
+            if($JoinADDomain -eq "True") {
+
+            if($UpdateDNSAddress1 -ne "NONE") {
+
+             $Index = Get-DnsClientServerAddress -AddressFamily IPv4 -InterfaceAlias 'Ethernet *'
+
+               write-host("############# ===------> The current DNS Server Address is:") 
+               echo $Index
+
+               write-host("############# ===------> Updating DNS Server Address(es)..................") 
+             $Index | Set-DnsClientServerAddress -ServerAddresses ("${UpdateDNSAddress1}","${UpdateDNSAddress2}")
+
+            $Index = Get-DnsClientServerAddress -AddressFamily IPv4 -InterfaceAlias 'Ethernet *'
+
+               write-host("############# ===------> The DNS Server has been updated to:") 
+               echo $Index
+            }
+            else {
+             write-host("############# ===------> No DNS change was requested")
+            }
+
+             function Get-SSM-Value {
+             param ([string]$Key)
+             return $(Get-SSMParameterValue -Name $Key -WithDecryption $true).Parameters.Value
+             }
+             write-host("############# ===------> Retrieved SSM stored paramenter values")
+
+            $domainjoin_user = Get-SSM-Value -Key ${DomainJoinUserKey} | ConvertTo-SecureString -asPlainText -Force
+            $domainjoin_pswd = Get-SSM-Value -Key ${DomainJoinPasswordKey} | ConvertTo-SecureString -asPlainText -Force
+            $credential = New-Object System.Management.Automation.PSCredential($domainjoin_user, $domainjoin_pswd)
+            write-host("############# ===------> Added AD credentials to variables")
+
+            Add-Computer -DomainName "${DomainNameFQDN}" -Credential $credential -Force
+            write-host("############# ===------> Joined Computer to AD Domain")
+
+            write-host("############# ===------> Restarting Computer after domain joined")
+            Restart-Computer
+            }
+            else {
+             write-host("############# ===------> No Active Directory Domain was selected")
+            }
+            write-host("############# ===------> Userdata Complete - Rebooting")
+              sleep 30
+              Restart-Computer -Force
+              Stop-Transcript
+          </powershell>
+
+  NewTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Condition: CreateNewTargetGroup
+    DeletionPolicy: Retain
+    Properties:
+      Port: 443
+      Protocol: HTTPS
+      VpcId: !Ref AWSVpcId
+      Targets:
+        - Id: !Ref AWSEC2Server
+      TargetType: instance
+      Name: !Sub '${TargetGroupName}'
+      HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: 60
+      HealthCheckPath: !Sub '/'
+      HealthCheckPort: traffic-port
+      HealthCheckTimeoutSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Matcher:
+        HttpCode: 200-399
+
+  ALBListenerRule:
+    Type: 'AWS::ElasticLoadBalancingV2::ListenerRule'
+    Condition: CreateNewTargetGroup
+    DeletionPolicy: Retain
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref NewTargetGroup
+      Conditions:
+        - Field: host-header
+          HostHeaderConfig:
+            Values:
+              - !Sub '${DNSEndPoint}'
+      ListenerArn: !Ref ALBListenerARN
+      Priority: 2
+
+Outputs:
+  AWSEC2ServerOutput:
+    Description: Ec2 instance AWSEC2Server
+    Value: !Ref AWSEC2Server
+    Export:
+      Name: !Sub '${AWSServerName}-${AWS::AccountId}-${AWS::StackName}'

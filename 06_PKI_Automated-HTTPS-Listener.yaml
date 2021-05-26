@@ -1,0 +1,108 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0 
+
+AWSTemplateFormatVersion: 2010-09-09
+Description:
+  'The Automated Load Balancer CloudFormation script performs the following orchestration tasks:    
+  - Creates an HTTPS Listener with an ACM Certificate and associates it with the Load Balancer
+  - You can choose to create an HTTPS listener for an ALB or NLB'
+
+Parameters:
+  CertificateId:
+    Description: Enter an ACM Certificate Identifier https://console.aws.amazon.com/acm/home?region=us-east-1#/?id=%3F
+    Type: String
+
+  LoadBalancer:
+    Description: Enter a Load Balancer ARN https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#LoadBalancers:sort=loadBalancerName 
+    Type: String
+  AWSVpcId:
+    Description: Select the appropriate AWS VpcID here.
+    Type: 'AWS::EC2::VPC::Id'
+
+  AWSTargetGroupName:
+    Description: Enter a name for the Default Target group
+    Type: String
+    Default: TargetGroupName
+
+  AWSLoadBalancerType:
+    Description: Select the appropriate Load Balancer Scheme (Use 'network = NLB' and 'application = ALB').
+    Type: String
+    Default: network
+    AllowedValues:
+      - network
+      - application
+
+Metadata: 
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - 
+        Label: 
+          default: "ACM Certificate ID and Load Balancer ARN"
+        Parameters: 
+          - AWSTargetGroupName
+          - AWSVpcId
+          - CertificateId
+          - LoadBalancer
+
+Conditions:
+  AWSALBLoadBalancerCondition: !Equals 
+      - !Ref AWSLoadBalancerType
+      - "application"
+  AWSNLBLoadBalancerCondition: !Equals 
+      - !Ref AWSLoadBalancerType
+      - "network"
+
+Resources:
+  LoadBalancerListener:
+    Condition: AWSALBLoadBalancerCondition
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Join
+          - ":"
+          - - arn:aws:acm
+            - !Ref AWS::Region
+            - !Ref AWS::AccountId
+            - !Join ["/", ["certificate", !Ref CertificateId ]]
+      SslPolicy: ELBSecurityPolicy-TLS-1-2-Ext-2018-06
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            ContentType: "text/plain"
+            MessageBody: "This Service is under maintenance at the moment!"
+            StatusCode: "504"
+
+  NetworkLoadBalancerListener:
+    Condition: AWSNLBLoadBalancerCondition
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DeletionPolicy: Retain
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: TLS
+      Certificates:
+        - CertificateArn: !Join
+          - ":"
+          - - arn:aws:acm
+            - !Ref AWS::Region
+            - !Ref AWS::AccountId
+            - !Join ["/", ["certificate", !Ref CertificateId ]]
+      SslPolicy: ELBSecurityPolicy-TLS-1-2-Ext-2018-06
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AWSServerTargetGroup
+            
+  AWSServerTargetGroup:
+    Condition: AWSNLBLoadBalancerCondition
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    DeletionPolicy: Retain
+    Properties:
+      Name: !Sub '${AWSTargetGroupName}'
+      Port: 80
+      Protocol: TCP
+      VpcId: !Ref AWSVpcId

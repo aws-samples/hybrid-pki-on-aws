@@ -1,0 +1,164 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0 
+
+AWSTemplateFormatVersion: 2010-09-09
+Description:
+  'The Automated S3 Bucket cloudformation script performs the following orchestration tasks:
+  - Creates a new S3 bucket to store the AIA and CRL Distribution Point for the CustomerName PKI solutions
+  - It configures the bucket with Server-Side encryption with Amazon AES-256 key
+  - Creates a new S3 bucket policy that restricts access to ACM private CA, AD CS VPC Endpoint, and cross accounts
+  - configures server access logging bucket
+
+  **** EDITING INSTRUCTIONS ****
+  To grant access to new AWS account --> go to (PKIS3BucketAccessPolicy > (Sid = StatementCrossAccountAccess)
+  > Principal > AWS) section and add the new AccountID as a new line.
+
+  To grant access to new EC2 Servers --> go to (PKIS3BucketAccessPolicy > (StatementOnpremClientsAccess1 & 2)
+  > Condition > StringEquals > aws:SourceVpce) section and add the new VPC Endpoints as a new line.'
+  
+
+Parameters:
+  pkiS3BucketName:
+    Description: Enter a name for the CRL S3 bucket.
+    Type: String
+
+  S3VPCEndpoint:
+    Description: >-
+      Select the appropriate S3 VPC Endpoint from the console
+      https://console.aws.amazon.com/vpc/home?region=us-east-1#Endpoints:sort=vpcEndpointId.
+    Type: String
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: S3 Bucket Configurations
+        Parameters:
+          - pkiS3BucketName
+          - S3VPCEndpoint
+
+Resources:
+  pkiS3AccessLoggingBucket:
+    DeletionPolicy: Retain
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Join
+        - '-'
+        - - !Sub '${pkiS3BucketName}-accesslogs-${AWS::AccountId}'
+      AccessControl: LogDeliveryWrite
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Name
+          Value: !Sub '${pkiS3BucketName}-accesslogs-${AWS::AccountId}'
+
+  PKIS3Bucket:
+    DeletionPolicy: Retain
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      AccessControl: Private
+      BucketName: !Join
+        - '-'
+        - - !Ref pkiS3BucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LoggingConfiguration:
+        DestinationBucketName: !Sub '${pkiS3BucketName}-accesslogs-${AWS::AccountId}'
+        LogFilePrefix: 'pki-crl-access-logs'
+      Tags:
+        - Key: Name
+          Value: !Sub '${pkiS3BucketName}'
+        - Key: BucketURL
+          Value: !Sub 'http://${pkiS3BucketName}.s3.amazonaws.com/'
+
+  PKIS3BucketAccessPolicy:
+    DeletionPolicy: Retain
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref PKIS3Bucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: StatementPKIAccountAccess
+            Effect: Allow
+            Principal:
+              AWS:
+               - !Sub '${AWS::AccountId}'
+            Action:
+              - 's3:*'
+            Resource:
+              - !Join
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref PKIS3Bucket
+                  - /*
+              - !Join
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref PKIS3Bucket
+          - Sid: StatementCrossAccountAccess
+            Effect: Allow
+            Principal:
+              AWS:
+               - !Sub '${AWS::AccountId}'
+            Action:
+              - 's3:Get*'
+              - 's3:List*'
+            Resource:
+              - !Join
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref PKIS3Bucket
+                  - /*
+              - !Join
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref PKIS3Bucket
+          - Sid: StatementACMSubCAAccess
+            Effect: Allow
+            Principal:
+              Service: acm-pca.amazonaws.com
+            Action: 's3:*'
+            Resource:
+              - !Join
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref PKIS3Bucket
+                  - /*
+              - !Join
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref PKIS3Bucket
+          - Sid: StatementADCSSubCAAccess
+            Effect: Allow
+            Principal: '*'
+            Action:
+              - 's3:Get*'
+              - 's3:List*'
+              - 's3:Put*'
+            Resource:
+              - !Join
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref PKIS3Bucket
+                  - /*
+              - !Join
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref PKIS3Bucket
+            Condition:
+              StringEquals:
+                'aws:SourceVpce':
+                  - !Ref S3VPCEndpoint
+
+
+Outputs:
+  PKIS3BucketOut:
+    Description: S3 Bucket output
+    Value: !Ref PKIS3Bucket
+    Export:
+      Name: !Sub '${pkiS3BucketName}-PKIS3Bucket'

@@ -1,0 +1,221 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: 2010-09-09
+Description:
+  'The Automated VPC modification CloudFormation script performs the following orchestration tasks:
+  - Creates three additional private subnets (Availability Zones a, b, & c) for the CloudHSM cluster
+  - Creates three additional route tables with local VPC routes and route through the transit gateway
+  - Allocates appropriate IP CIDR blocks for the new SubnetRouteTableAssociation'
+
+Parameters:
+  EnvironmentName:
+    Description: 'Enter an environment name, this will be prefixed to resources'
+    Type: String
+    ConstraintDescription: must specify an environment prefix (SBX-<Service>, DEV-<Service>, TST-<Service> or PRD-<Service>)
+
+  AWSVpcId:
+    Description: Select the AWS VpcID here.
+    Type: 'AWS::EC2::VPC::Id'
+
+  AWSTgwId:
+    Description: Enter the AWS Transit Gateway ID here (https://console.aws.amazon.com/vpc/home?region=us-east-1#TransitGateways:sort=transitGatewayId).
+    Type: String
+    ConstraintDescription: must specify a transit gateway ID
+
+  AWSTransitGatewayCIDR:
+    Description: >-
+       Enter the IP range (CIDR notation) for the Transit gateway
+    Type: String
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$'
+
+  CloudHSMSubnet1CIDR:
+    Description: >-
+      Enter the IP range (CIDR notation) for the CloudHSM subnet in the first Availability Zone
+    Type: String
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$'
+
+  CloudHSMSubnet2CIDR:
+    Description: >-
+      Enter the IP range (CIDR notation) for the CloudHSM subnet in the second Availability Zone
+    Type: String
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$'
+
+  CloudHSMSubnet3CIDR:
+    Description: >-
+      Enter the IP range (CIDR notation) for the public subnet in the third Availability Zone
+    Type: String
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$'
+
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Name and Network properties
+        Parameters:
+          - EnvironmentName
+          - AWSVpcId
+      - Label:
+          default: Subnets CIDR Notations
+        Parameters:
+          - CloudHSMSubnet1CIDR
+          - CloudHSMSubnet2CIDR
+          - CloudHSMSubnet3CIDR
+      - Label:
+          default: Transit Gateway Properties
+        Parameters:
+          - AWSTgwId
+          - AWSTransitGatewayCIDR
+
+Resources:
+  CloudHSMNSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    DeletionPolicy: Retain
+    Properties:
+      VpcId: !Ref AWSVpcId
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      CidrBlock: !Ref CloudHSMSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-sn-${AWS::AccountId}-Private-1'
+
+  CloudHSMNSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    DeletionPolicy: Retain
+    Properties:
+      VpcId: !Ref AWSVpcId
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      CidrBlock: !Ref CloudHSMSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-sn-${AWS::AccountId}-Private-2'
+
+  CloudHSMNSubnet3:
+    Type: 'AWS::EC2::Subnet'
+    DeletionPolicy: Retain
+    Properties:
+      VpcId: !Ref AWSVpcId
+      AvailabilityZone: !Select
+        - 2
+        - !GetAZs ''
+      CidrBlock: !Ref CloudHSMSubnet3CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-sn-${AWS::AccountId}-Private-3'
+
+  PrivateRouteTable1:
+    Type: 'AWS::EC2::RouteTable'
+    DeletionPolicy: Retain
+    Properties:
+      VpcId: !Ref AWSVpcId
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-rt-${AWS::AccountId}-Private-1'
+
+  DefaultPrivateRoute1:
+    Type: 'AWS::EC2::Route'
+    DeletionPolicy: Retain
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: !Ref AWSTransitGatewayCIDR
+      TransitGatewayId: !Ref AWSTgwId
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    DeletionPolicy: Retain
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref CloudHSMNSubnet1
+
+  PrivateRouteTable2:
+    Type: 'AWS::EC2::RouteTable'
+    DeletionPolicy: Retain
+    Properties:
+      VpcId: !Ref AWSVpcId
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-rt-${AWS::AccountId}-Private-2'
+
+  DefaultPrivateRoute2:
+    Type: 'AWS::EC2::Route'
+    DeletionPolicy: Retain
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: !Ref AWSTransitGatewayCIDR
+      TransitGatewayId: !Ref AWSTgwId
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    DeletionPolicy: Retain
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      SubnetId: !Ref CloudHSMNSubnet2
+
+  PrivateRouteTable3:
+    Type: 'AWS::EC2::RouteTable'
+    DeletionPolicy: Retain
+    Properties:
+      VpcId: !Ref AWSVpcId
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-rt-${AWS::AccountId}-Private-3'
+
+  DefaultPrivateRoute3:
+    Type: 'AWS::EC2::Route'
+    DeletionPolicy: Retain
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable3
+      DestinationCidrBlock: !Ref AWSTransitGatewayCIDR
+      TransitGatewayId: !Ref AWSTgwId
+
+  PrivateSubnet3RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    DeletionPolicy: Retain
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable3
+      SubnetId: !Ref CloudHSMNSubnet3
+
+Outputs:
+  CloudHSMNSubnet1Out:
+    Description: CloudHSM Subnet 1
+    Value: !Ref CloudHSMNSubnet1
+    Export:
+      Name: !Sub '${EnvironmentName}-sn-${AWS::AccountId}-Private-1'
+
+  CloudHSMNSubnet2Out:
+    Description: CloudHSM Subnet 2
+    Value: !Ref CloudHSMNSubnet2
+    Export:
+      Name: !Sub '${EnvironmentName}-sn-${AWS::AccountId}-Private-2'
+
+  CloudHSMNSubnet3Out:
+    Description: CloudHSM Subnet 3
+    Value: !Ref CloudHSMNSubnet3
+    Export:
+      Name: !Sub '${EnvironmentName}-sn-${AWS::AccountId}-Private-3'
+
+  PrivateRouteTable1Out:
+    Description: CloudHSM Route Table 1
+    Value: !Ref PrivateRouteTable1
+    Export:
+      Name: !Sub '${EnvironmentName}-rt-${AWS::AccountId}-Private-1'
+
+  PrivateRouteTable2Out:
+    Description: CloudHSM Route Table 1
+    Value: !Ref PrivateRouteTable2
+    Export:
+      Name: !Sub '${EnvironmentName}-rt-${AWS::AccountId}-Private-2'
+
+  PrivateRouteTable3Out:
+    Description: CloudHSM Route Table 3
+    Value: !Ref PrivateRouteTable3
+    Export:
+      Name: !Sub '${EnvironmentName}-rt-${AWS::AccountId}-Private-3'

@@ -1,0 +1,75 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: 2010-09-09
+Description:
+  'The Automated ACM private CA cloudformation script performs the following orchestration tasks:
+  - Creates an AWS Private Certificate Authority with the organization details.
+  -- Without using cloudformation to deploy ACM Private CA, it is not possible to sign the subordinate with external Windows RootCA'
+
+Parameters:
+  AWSPrivateCAType:
+    Description: Select the appropriate Certificate Authority Type
+    Type: String
+    Default: SUBORDINATE
+    AllowedValues: [SUBORDINATE]
+
+  AWSPCACommonName:
+    Description: Enter the Certificate authority name. Max length of 64 characters
+    Type: String
+    Default: Sub1
+
+  AWSPCAKeyAlgorithm:
+    Description: Select the appropriate Key Algorithm
+    Type: String
+    Default: RSA_2048
+    AllowedValues: [RSA_2048, RSA_4096]
+
+  AWSPCASigningAlgorithm:
+    Description: Select the appropriate signing algorithm
+    Type: String
+    Default: SHA256WITHRSA
+    AllowedValues: [SHA256WITHRSA]
+
+  AWSCertExpirationInDays:
+    Description: Enter the CRL expiration date in Days
+    Type: String
+
+  AWSCRLS3BucketName:
+    Description: Enter the name of the existing CRL S3 bucket
+    Type: String
+
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Certificate Authority General Properties
+        Parameters:
+          - AWSPrivateCAType
+          - AWSPCAKeyAlgorithm
+          - AWSPCASigningAlgorithm
+      - Label:
+          default: Subject Information
+        Parameters:
+          - AWSPCACommonName
+      - Label:
+          default: Certificate Revocation List configurations
+        Parameters:
+          - AWSCRLS3BucketName
+          - AWSCertExpirationInDays
+
+Resources:
+  SubordinateCAOne:
+    Type: 'AWS::ACMPCA::CertificateAuthority'
+    Properties:
+      Type: !Ref AWSPrivateCAType
+      KeyAlgorithm: !Ref AWSPCAKeyAlgorithm
+      SigningAlgorithm: !Ref AWSPCASigningAlgorithm
+      Subject:
+        CommonName: !Ref AWSPCACommonName
+      RevocationConfiguration:
+        CrlConfiguration:
+          Enabled: true
+          ExpirationInDays: !Ref AWSCertExpirationInDays
+          S3BucketName: !Ref AWSCRLS3BucketName
