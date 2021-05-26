@@ -15,7 +15,7 @@ See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more inform
 
 This library is licensed under the MIT-0 License. See the LICENSE file.
 
-The solution architecture is depicted in the preceding figure—Figure 3. The solution uses an offline root CA that can be operated on-premises or in an Amazon VPC, while the subordinate Windows CAs run on EC2 instances and are integrated with CloudHSM for key management and storage. To insulate the PKI from external access, the CloudHSM cluster are deployed in protected subnets, the EC2 instances are deployed in private subnets, and the host VPC has site-to-site network connectivity to the on-premises network. The Amazon EC2 volumes are encrypted with AWS KMS customer managed keys. Users and devices connect and enroll to the PKI interface through a Network Load Balancer.
+The solution uses an offline root CA that can be operated on-premises or in an Amazon VPC, while the subordinate Windows CAs run on EC2 instances and are integrated with CloudHSM for key management and storage. To insulate the PKI from external access, the CloudHSM cluster are deployed in protected subnets, the EC2 instances are deployed in private subnets, and the host VPC has site-to-site network connectivity to the on-premises network. The Amazon EC2 volumes are encrypted with AWS KMS customer managed keys. Users and devices connect and enroll to the PKI interface through a Network Load Balancer.
 
 This solution also includes a subordinate ACM private CA to issue certificates that will be installed on AWS services that are integrated with ACM. For example, ELB, CloudFront, and API Gateway. This is so that the certificates users see are always presented from your organization’s internal PKI.
 
